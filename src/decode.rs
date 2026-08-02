@@ -12,9 +12,10 @@
 //! loss, since the search only ever compares neighbouring cells.
 
 use crate::constants::{
-    FT4_COSTAS_PATTERN, FT4_GRAY_MAP, FT4_LENGTH_SYNC, FT4_ND, FT4_NUM_SYNC, FT4_SYNC_OFFSET,
-    FT4_XOR_SEQUENCE, FT8_COSTAS_PATTERN, FT8_GRAY_MAP, FT8_LENGTH_SYNC, FT8_ND, FT8_NN,
-    FT8_NUM_SYNC, FT8_SYNC_OFFSET, LDPC_K, LDPC_K_BYTES, LDPC_N,
+    FT4_COSTAS_PATTERN, FT4_GRAY_MAP, FT4_LENGTH_SYNC, FT4_ND, FT4_NN, FT4_NUM_SYNC,
+    FT4_SYMBOL_PERIOD, FT4_SYNC_OFFSET, FT4_XOR_SEQUENCE, FT8_COSTAS_PATTERN, FT8_GRAY_MAP,
+    FT8_LENGTH_SYNC, FT8_ND, FT8_NN, FT8_NUM_SYNC, FT8_SYMBOL_PERIOD, FT8_SYNC_OFFSET, LDPC_K,
+    LDPC_K_BYTES, LDPC_N,
 };
 use crate::message::{Message, PAYLOAD_BYTES};
 use crate::{crc, ldpc};
@@ -415,6 +416,41 @@ pub fn ft8_tones(payload: &[u8; PAYLOAD_BYTES]) -> [u8; FT8_NN] {
     tones
 }
 
+/// The 105 channel symbols an FT4 payload transmits as: a ramp, four 4-symbol
+/// Costas groups interleaved with three data blocks, and a closing ramp.
+///
+/// Note the payload is XORed with a fixed sequence *before* the CRC and FEC are
+/// computed — FT4 does this so that CQ, which is mostly zeros, does not put a
+/// long run of one tone on the air.
+pub fn ft4_tones(payload: &[u8; PAYLOAD_BYTES]) -> [u8; FT4_NN] {
+    let mut scrambled = *payload;
+    for (p, x) in scrambled.iter_mut().zip(FT4_XOR_SEQUENCE.iter()) {
+        *p ^= x;
+    }
+    let mut a91 = [0u8; LDPC_K_BYTES];
+    crc::add(&scrambled, &mut a91);
+    let codeword = ldpc::encode(&a91);
+
+    let mut tones = [0u8; FT4_NN];
+    for m in 0..FT4_NUM_SYNC {
+        for k in 0..FT4_LENGTH_SYNC {
+            tones[1 + FT4_SYNC_OFFSET * m + k] = FT4_COSTAS_PATTERN[m][k];
+        }
+    }
+    for k in 0..FT4_ND {
+        let bits = (codeword[2 * k] << 1) | codeword[2 * k + 1];
+        let sym = k + if k < 29 {
+            5
+        } else if k < 58 {
+            9
+        } else {
+            13
+        };
+        tones[sym] = FT4_GRAY_MAP[bits as usize];
+    }
+    tones
+}
+
 /// Signal-to-noise in dB, referenced to a 2500 Hz noise bandwidth — the
 /// convention WSJT-X reports and everyone reads.
 ///
@@ -436,14 +472,18 @@ pub fn ft8_tones(payload: &[u8; PAYLOAD_BYTES]) -> [u8; FT8_NN] {
 /// result as good to a dB or two rather than calibrated; it comes from
 /// magnitudes already quantised to half a dB.
 fn estimate_snr(wf: &Waterfall, cand: &Candidate, payload: &[u8; PAYLOAD_BYTES]) -> f32 {
-    let tones = ft8_tones(payload);
+    let (tones, num_tones, symbol_period): (&[u8], i16, f32) = match wf.protocol {
+        Protocol::Ft8 => (&ft8_tones(payload)[..], 8, FT8_SYMBOL_PERIOD),
+        Protocol::Ft4 => (&ft4_tones(payload)[..], 4, FT4_SYMBOL_PERIOD),
+    };
     let stride = wf.block_stride() as isize;
     let base = cand_base(wf, cand);
-    // The 8 tones span bins 0..7 from the candidate; 4 bins (25 Hz) of guard
+    // The tones span bins 0..num_tones-1 from the candidate; 4 bins of guard
     // clears Hann leakage, and 20 bins of window either side is enough to
     // median over without wandering into unrelated spectrum.
     const GUARD: i16 = 4;
     const WINDOW: i16 = 20;
+    let last = num_tones - 1;
 
     let mut sig = 0.0f64;
     let mut n_sig = 0usize;
@@ -468,8 +508,8 @@ fn estimate_snr(wf: &Waterfall, cand: &Candidate, payload: &[u8; PAYLOAD_BYTES])
             sig += 10f64.powf(mag_db(v) as f64 / 10.0);
             n_sig += 1;
         }
-        for off in -(GUARD + WINDOW)..=(7 + GUARD + WINDOW) {
-            if (-GUARD..=(7 + GUARD)).contains(&off) {
+        for off in -(GUARD + WINDOW)..=(last + GUARD + WINDOW) {
+            if (-GUARD..=(last + GUARD)).contains(&off) {
                 continue; // the signal and its guard
             }
             let bin = cand.freq_offset + off;
@@ -499,7 +539,10 @@ fn estimate_snr(wf: &Waterfall, cand: &Candidate, payload: &[u8; PAYLOAD_BYTES])
     let s_mean = sig / n_sig as f64;
     // The signal bin holds signal *plus* noise.
     let signal = (s_mean - n_mean).max(n_mean * 1e-4);
-    let snr = 10.0 * (signal / n_mean).log10() - 26.0;
+    // A bin is 1/symbol_period Hz wide — 6.25 for FT8, 20.83 for FT4 — so the
+    // correction to the 2500 Hz reference is not the same constant for both.
+    let bw_correction = 10.0 * ((1.0 / symbol_period) / 2500.0).log10();
+    let snr = 10.0 * (signal / n_mean).log10() + bw_correction as f64;
     (snr as f32).clamp(-30.0, 40.0)
 }
 
@@ -538,9 +581,6 @@ pub fn decode_candidate(
 
     let mut payload = [0u8; PAYLOAD_BYTES];
     payload.copy_from_slice(&a91[..PAYLOAD_BYTES]);
-    if wf.protocol == Protocol::Ft8 {
-        status.snr_db = estimate_snr(wf, cand, &payload);
-    }
     if wf.protocol == Protocol::Ft4 {
         // FT4 XORs the message with a fixed sequence so that CQ, which is
         // mostly zeros, does not transmit a long run of one tone.
@@ -548,6 +588,7 @@ pub fn decode_candidate(
             *p ^= x;
         }
     }
+    status.snr_db = estimate_snr(wf, cand, &payload);
     (Some(Message::from_payload(payload)), status)
 }
 

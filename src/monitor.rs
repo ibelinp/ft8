@@ -471,6 +471,62 @@ mod tests {
         );
     }
 
+    /// FT4: same message layer, different sync patterns, symbol rate, slot
+    /// length and a scrambled payload. Every one of those is a chance to be
+    /// wrong in a way FT8 tests cannot see, so it gets its own end-to-end run.
+    #[test]
+    fn decodes_ft4() {
+        use crate::constants::FT4_SYMBOL_PERIOD;
+        use crate::decode::ft4_tones;
+
+        let msg = Message::encode_std("CQ", "K1ABC", "FN42").unwrap();
+        let cfg = MonitorConfig {
+            protocol: Protocol::Ft4,
+            ..MonitorConfig::default()
+        };
+        let tones = ft4_tones(&msg.payload);
+
+        // FT4 is 4-FSK at 1/0.048 = 20.833 Hz spacing, 0.048 s per symbol.
+        let spacing = 1.0 / FT4_SYMBOL_PERIOD;
+        let block = (cfg.sample_rate * FT4_SYMBOL_PERIOD) as usize;
+        let mut audio = Vec::with_capacity(tones.len() * block);
+        let mut phase = 0.0f32;
+        let mut rng = 0x9E3779B97F4A7C15u64;
+        for &t in tones.iter() {
+            let f = 1000.0 + t as f32 * spacing;
+            let dphi = 2.0 * core::f32::consts::PI * f / cfg.sample_rate;
+            for _ in 0..block {
+                // Some noise, or SNR simply pins at the clamp and the assertion
+                // below proves nothing.
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let n = ((rng >> 40) as i32 as f32 / 8_388_608.0 - 1.0) * 0.3;
+                audio.push(phase.sin() + n);
+                phase += dphi;
+                if phase > core::f32::consts::TAU {
+                    phase -= core::f32::consts::TAU;
+                }
+            }
+        }
+
+        let mut mon = Monitor::new(cfg);
+        for chunk in audio.chunks(mon.block_size()) {
+            mon.process(chunk);
+        }
+        let decodes = mon.decode_all(40, 10, 40);
+        assert!(!decodes.is_empty(), "FT4 decoded nothing");
+        let m = decodes[0].message.decode_std(&mut NoHash).unwrap();
+        assert_eq!(&*m.call_to, "CQ");
+        assert_eq!(&*m.call_de, "K1ABC");
+        assert_eq!(&*m.extra, "FN42");
+        // SNR must be reported for FT4 too, with FT4's wider bins accounted
+        // for — it was FT8-only until this test existed.
+        let snr = decodes[0].status.snr_db;
+        assert!(
+            snr.is_finite() && (-30.0..40.0).contains(&snr),
+            "FT4 SNR {snr}"
+        );
+    }
+
     /// Silence must produce nothing at all.
     #[test]
     fn silence_decodes_to_nothing() {

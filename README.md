@@ -61,6 +61,8 @@ A complete receive chain:
   `RRR`/`RR73`/`73`, `/P` and `/R`, `CQ nnn` / `CQ ABCD`, and the Swaziland and
   Guinea prefix work-arounds), free text, telemetry
 - **SNR** in dB over a 2500 Hz reference bandwidth, the WSJT-X convention
+- **FT4** as well as FT8 — its own sync patterns, symbol rate, slot length and
+  scrambled payload, decoded end to end in the test suite
 - **Encoding**, enough to build a valid waveform — it exists mainly so the
   decoder can be tested without off-air recordings, but it is what a
   transmitter would need
@@ -73,8 +75,8 @@ Not yet:
 - Hashed callsigns show as `<...>`, because no callsign hash table is kept —
   which is what WSJT-X shows too, before it has heard the full call. The
   `CallsignHash` trait is there for a caller that wants to supply one.
-- FT4 shares the message and LDPC layers and has its sync patterns wired up, but
-  is far less exercised than FT8
+- FT4 is verified end to end against a synthesised waveform, but it has had far
+  less exercise than FT8 and none against live signals
 
 The SNR estimate has not been calibrated against a reference receiver. Its
 spread and ordering are right; treat the absolute figure as good to a few dB.
@@ -86,7 +88,8 @@ The tests synthesise real waveforms — phase-continuous 8-FSK at 6.25 Hz spacin
 chain, including the parts a bit-level test cannot see: a wrong window, a wrong
 FFT size, an off-by-one in bin indexing. Two overlapping stations must both
 decode; noise three times the signal amplitude must still decode; silence must
-decode to nothing; SNR must fall monotonically as noise is added.
+decode to nothing; SNR must fall monotonically as noise is added; and FT4 makes
+the same round trip with its own sync patterns and symbol rate.
 
 It has also been run against live 20 m off the air, decoding 14–17 stations per
 slot at 3–8 ms per slot.
