@@ -57,11 +57,13 @@ pub mod crc;
 pub mod decode;
 pub mod ldpc;
 pub mod message;
+pub mod modulate;
 pub mod monitor;
 pub mod text;
 
 pub use decode::Protocol;
 pub use message::{CallsignHash, Error, Field, Message, MessageType, NoHash, StdMessage};
+pub use modulate::modulate;
 pub use monitor::{Decode, Monitor, MonitorConfig};
 pub use text::Str;
 

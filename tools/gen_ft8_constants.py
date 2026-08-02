@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Translate ft8_lib's constants.c tables into Rust.
 
-Pipe the output through `cargo fmt` — this emits valid but unformatted Rust.
-
 Mechanical, because the LDPC tables are ~1300 numbers and hand-copying them
 would introduce exactly the kind of single-digit error that shows up as "some
 messages don't decode" months later. The counts are asserted here and the

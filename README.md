@@ -32,6 +32,24 @@ for chunk in audio.chunks(mon.block_size()) {
 let decodes = mon.decode_all(30, 10, 30);
 ```
 
+Transmit side:
+
+```rust
+use ft8::{modulate, Message, Protocol};
+
+let msg = Message::encode_std("CQ", "K1ABC", "FN42")?;
+let audio = modulate(&msg.payload, Protocol::Ft8, 1500.0, 12000.0);  // 12.64 s
+```
+
+That is GFSK-shaped, not hard-switched FSK. It matters: measured against the
+naive version, shaping puts **80 dB less energy outside the signal** (-132 dB
+vs -52 dB), which is the difference between a signal you can transmit and one
+that splatters over the stations either side of you. The envelope is also
+ramped at both ends so keying does not click.
+
+Starting the transmission on the UTC slot boundary and keying the radio are
+left to the caller — both are station-specific.
+
 One pass finds **every** station in the passband, not one at a time: the sync
 search is a 2-D scan over time and frequency, so twenty simultaneous
 transmissions come out of twenty different cells of the same spectrogram.
@@ -63,9 +81,9 @@ A complete receive chain:
 - **SNR** in dB over a 2500 Hz reference bandwidth, the WSJT-X convention
 - **FT4** as well as FT8 — its own sync patterns, symbol rate, slot length and
   scrambled payload, decoded end to end in the test suite
-- **Encoding**, enough to build a valid waveform — it exists mainly so the
-  decoder can be tested without off-air recordings, but it is what a
-  transmitter would need
+- **Encoding all the way to audio** — message packing, CRC, LDPC, Costas
+  insertion and GFSK modulation. `modulate()` hands back samples you can write
+  to a WAV or push at a sound card
 
 Not yet:
 
@@ -90,6 +108,11 @@ FFT size, an off-by-one in bin indexing. Two overlapping stations must both
 decode; noise three times the signal amplitude must still decode; silence must
 decode to nothing; SNR must fall monotonically as noise is added; and FT4 makes
 the same round trip with its own sync patterns and symbol rate.
+
+The modulator is tested by decoding its own output, and separately by measuring
+occupied bandwidth against an unshaped modulator — a correct-sounding GFSK
+implementation that is not actually shaping anything would still pass the round
+trip.
 
 It has also been run against live 20 m off the air, decoding 14–17 stations per
 slot at 3–8 ms per slot.
