@@ -117,6 +117,7 @@ pub struct Monitor {
     max_blocks: usize,
     num_blocks: usize,
     symbol_period: f32,
+    slot_time: f32,
     protocol: Protocol,
     window: Vec<f32>,
     last_frame: Vec<f32>,
@@ -182,6 +183,7 @@ impl Monitor {
             max_blocks,
             num_blocks: 0,
             symbol_period,
+            slot_time,
             protocol: cfg.protocol,
             window,
             last_frame: vec![0.0; nfft],
@@ -196,11 +198,16 @@ impl Monitor {
         self.block_size
     }
 
-    /// Slot length in seconds: 15 for FT8, 7.5 for FT4. A caller cutting slots
-    /// on a wall clock needs this, and taking it from the monitor means the
-    /// two cannot disagree about which mode is running.
+    /// Slot length in seconds: exactly 15 for FT8, 7.5 for FT4.
+    ///
+    /// This is the protocol constant, NOT `max_blocks * symbol_period`.
+    /// `max_blocks` truncates — 15/0.16 is 93.75, stored as 93 — so deriving
+    /// the slot length from it gives 14.88 s. A caller cutting slots on a wall
+    /// clock with that number drifts 0.12 s every slot, half a minute an hour,
+    /// and silently stops decoding once it exceeds the ±2.5 s the protocol
+    /// tolerates. It looks like a dying band rather than a bug.
     pub fn slot_seconds(&self) -> f32 {
-        self.max_blocks as f32 * self.symbol_period
+        self.slot_time
     }
 
     /// Symbols stored so far.
@@ -532,6 +539,21 @@ mod tests {
             snr.is_finite() && (-30.0..40.0).contains(&snr),
             "FT4 SNR {snr}"
         );
+    }
+
+    /// The slot length must be the protocol constant to the last decimal.
+    /// Anything derived from max_blocks is short, and a short slot drifts
+    /// against UTC until decoding stops — over tens of minutes, so no quick
+    /// test would notice.
+    #[test]
+    fn slot_length_is_exact() {
+        let ft8 = Monitor::new(MonitorConfig::default());
+        assert_eq!(ft8.slot_seconds(), 15.0, "FT8 slot");
+        let ft4 = Monitor::new(MonitorConfig {
+            protocol: Protocol::Ft4,
+            ..Default::default()
+        });
+        assert_eq!(ft4.slot_seconds(), 7.5, "FT4 slot");
     }
 
     /// Silence must produce nothing at all.
