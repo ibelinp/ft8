@@ -1,0 +1,17 @@
+[package]
+name = "ft8"
+version = "0.1.0"
+edition = "2021"
+description = "FT8/FT4 decoder. Give it audio, get messages."
+# NOT the workspace's proprietary licence. This crate is a port of ft8_lib
+# (MIT) and is intended to be published standalone, so it carries its own MIT
+# terms — same arrangement as the bfp-iq-codec and biq-format repos.
+license = "MIT"
+publish = true
+repository = "https://github.com/ibelinp/ft8"
+keywords = ["ft8", "ft4", "ham-radio", "amateur-radio", "ldpc"]
+categories = ["science", "encoding"]
+readme = "README.md"
+
+[dependencies]
+rustfft = "6"
