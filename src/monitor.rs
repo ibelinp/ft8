@@ -196,6 +196,13 @@ impl Monitor {
         self.block_size
     }
 
+    /// Slot length in seconds: 15 for FT8, 7.5 for FT4. A caller cutting slots
+    /// on a wall clock needs this, and taking it from the monitor means the
+    /// two cannot disagree about which mode is running.
+    pub fn slot_seconds(&self) -> f32 {
+        self.max_blocks as f32 * self.symbol_period
+    }
+
     /// Symbols stored so far.
     pub fn num_blocks(&self) -> usize {
         self.num_blocks
